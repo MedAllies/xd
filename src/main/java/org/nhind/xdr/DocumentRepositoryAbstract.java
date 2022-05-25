@@ -38,6 +38,7 @@ import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 
 import javax.activation.DataHandler;
@@ -106,7 +107,10 @@ public abstract class DocumentRepositoryAbstract
     
     @Value("${direct.xd.usestreams:false}")
     protected boolean useStreams;
-    
+
+   @Value("${direct.reply.email:nhindirect@nhindirect.org")
+   protected String defaultReplyEmail;
+
     @Autowired(required=false)
     protected StreamsSendClient streamsSendClient;
     
@@ -146,104 +150,114 @@ public abstract class DocumentRepositoryAbstract
      * @return a RegistryResponseType object
      * @throws Exception
      */
-    protected RegistryResponseType provideAndRegisterDocumentSet(ProvideAndRegisterDocumentSetRequestType prdst, SafeThreadData threadData) throws Exception 
+    protected RegistryResponseType provideAndRegisterDocumentSet(ProvideAndRegisterDocumentSetRequestType prdst, SafeThreadData threadData, boolean isOutbound) throws Exception
     {
         RegistryResponseType resp = null;
-        
-        try 
+
+        try
         {
             @SuppressWarnings("unused")
             InitialContext ctx = new InitialContext();
 
             DirectDocuments documents = xdsDirectDocumentsTransformer.transform(prdst);
-            
+
             List<String> forwards = new ArrayList<String>();
-                        
+            Collection<String> recipient = null;
+
             // Get endpoints (first check direct:to header, then go to intendedRecipients)
             if (StringUtils.isNotBlank(threadData.getDirectTo()))
                 forwards = Arrays.asList((new URI(threadData.getDirectTo()).getSchemeSpecificPart()));
             else
             {
                 forwards = ParserHL7.parseDirectRecipients(documents);
-               
+
             }
 
            // messageId = UUID.randomUUID().toString();  remove this , its is not righ,
             //we should keep the message id of the original message for a lot of reasons vpl
-            
+
             // TODO patID and subsetId  for atn
             String patId = threadData.getMessageId();
             String subsetId = threadData.getMessageId();
-            getAuditMessageGenerator().provideAndRegisterAudit( threadData.getMessageId(), threadData.getRemoteHost(), threadData.getRelatesTo(), threadData.getTo(), 
+            getAuditMessageGenerator().provideAndRegisterAudit( threadData.getMessageId(), threadData.getRemoteHost(), threadData.getRelatesTo(), threadData.getTo(),
                     threadData.getThisHost(), patId, subsetId, threadData.getPid());
 
-            // Send to MIME endpoints
-            if (getResolver().hasSmtpEndpoints(forwards)) 
-            {
-                String replyEmail;
-                // Get a reply address (first check direct:from header, then go to authorPerson)
-                if (StringUtils.isNotBlank(threadData.getDirectFrom()))
-                    replyEmail = (new URI(threadData.getDirectFrom())).getSchemeSpecificPart();
-                else
-                {
-                   // replyEmail = documents.getSubmissionSet().getAuthorPerson();
-                    replyEmail = documents.getSubmissionSet().getAuthorTelecommunication();
+           if(isOutbound) {
+
+              // Convert to MIME message and send it via Spring Cloud Streams
+              String replyEmail;
+              // Get a reply address (first check direct:from header, then go to authorPerson)
+              if (StringUtils.isNotBlank(threadData.getDirectFrom()))
+                 replyEmail = (new URI(threadData.getDirectFrom())).getSchemeSpecificPart();
+              else {
+                 // replyEmail = documents.getSubmissionSet().getAuthorPerson();
+                 replyEmail = documents.getSubmissionSet().getAuthorTelecommunication();
 
                  //   replyEmail = StringUtils.splitPreserveAllTokens(replyEmail, "^")[0];
-                    replyEmail = ParserHL7.parseXTN(replyEmail);
-                    replyEmail = StringUtils.contains(replyEmail, "@") ? replyEmail : "nhindirect@nhindirect.org";
-                }
+                 replyEmail = ParserHL7.parseXTN(replyEmail);
+                 replyEmail = StringUtils.contains(replyEmail, "@") ? replyEmail : defaultReplyEmail;
+              }
 
-                log.info("SENDING EMAIL TO " + getResolver().getSmtpEndpoints(forwards) + " with message id "
-                        + threadData.getMessageId());
+              // Check if recipient is SMTP
+              if (getResolver().hasSmtpEndpoints(forwards)) {
+                 recipient = getResolver().getSmtpEndpoints(forwards);
+              }
+              // Other way use address for XD
+              else {
+                 recipient = forwards;
+              }
 
-                // Construct message wrapper
-                DirectMessage message = new DirectMessage(replyEmail, getResolver().getSmtpEndpoints(forwards));
-                message.setSubject("XD* Originated Message");
-                message.setBody("Please find the attached XDM file.");
-                message.setDirectDocuments(documents);
+              log.info("SENDING EMAIL TO " + recipient + " with message id " + threadData.getMessageId());
 
-                String fileName = threadData.getMessageId().replaceAll("urn:uuid:", "");
-                
-                if (useStreams && streamsSendClient != null)
-                {
-                	streamsSendClient.send(message, fileName, threadData.getSuffix());
-                }
-                else
-                {
-                	// Send mail
-                	final SmtpSendClient mailClient = getMailClient();
-                	
-                	mailClient.send(message, fileName, threadData.getSuffix());
-                }
-                getAuditMessageGenerator().provideAndRegisterAuditSource( threadData.getMessageId(), threadData.getRemoteHost(), threadData.getRelatesTo(), 
-                        threadData.getTo(), threadData.getThisHost(), patId, subsetId, threadData.getPid());
-            }
+              // Construct message wrapper
+              DirectMessage message = new DirectMessage(replyEmail, recipient);
+              message.setSubject("XD* Originated Message");
+              message.setBody("Please find the attached XDM file.");
+              message.setDirectDocuments(documents);
 
-            // Send to XD endpoints
-            for (String reqEndpoint : getResolver().getXdEndpoints(forwards)) 
-            {
-                String endpointUrl = getResolver().resolve(reqEndpoint);
-                
-                String to = StringUtils.remove(endpointUrl, "?wsdl");
+              String fileName = threadData.getMessageId().replaceAll("urn:uuid:", "");
 
-                threadData.setTo(to);
-                threadData.setDirectTo(to);
-                threadData.save();
+              // Send message via Spring Cloud Streams
+              if (useStreams && streamsSendClient != null) {
+                 streamsSendClient.send(message, fileName, threadData.getSuffix());
+              } else {
+                 // Send message via JAMES
+                 final SmtpSendClient mailClient = getMailClient();
 
-                List<Document> docs = prdst.getDocument();
-                
-                // Make a copy of the original documents
-                List<Document> originalDocs = new ArrayList<Document>();
-                for (Document d : docs)
+                 mailClient.send(message, fileName, threadData.getSuffix());
+              }
+              getAuditMessageGenerator()
+                    .provideAndRegisterAuditSource(threadData.getMessageId(), threadData.getRemoteHost(),
+                          threadData.getRelatesTo(),
+                          threadData.getTo(), threadData.getThisHost(), patId, subsetId, threadData.getPid());
+
+           }
+           else {
+              // Send to XD endpoints
+
+              for (String reqEndpoint : getResolver().getXdEndpoints(forwards))
+              {
+                 String endpointUrl = getResolver().resolve(reqEndpoint);
+
+                 String to = StringUtils.remove(endpointUrl, "?wsdl");
+
+                 threadData.setTo(to);
+                 threadData.setDirectTo(to);
+                 threadData.save();
+
+                 List<Document> docs = prdst.getDocument();
+
+                 // Make a copy of the original documents
+                 List<Document> originalDocs = new ArrayList<Document>();
+                 for (Document d : docs)
                     originalDocs.add(d);
-                
-                // Clear document list
-                docs.clear();
-                
-                // Re-add documents
-                for (Document d : originalDocs) 
-                {
+
+                 // Clear document list
+                 docs.clear();
+
+                 // Re-add documents
+                 for (Document d : originalDocs)
+                 {
                     Document doc = new Document();
                     doc.setId(d.getId());
 
@@ -255,28 +269,32 @@ public abstract class DocumentRepositoryAbstract
                     DataSource source = new ByteArrayDataSource(buff, documents.getDocument(d.getId()).getMetadata().getMimeType());
                     DataHandler dhnew = new DataHandler(source);
                     doc.setValue(dhnew);
-    
+
                     docs.add(doc);
-                }
+                 }
 
-                log.info(" SENDING TO ENDPOINT " + to);
+                 log.info(" SENDING TO ENDPOINT " + to);
 
-                DocumentRepositoryProxy proxy = new DocumentRepositoryProxy(endpointUrl, new DirectSOAPHandlerResolver());
-                
-                RegistryResponseType rrt = proxy.provideAndRegisterDocumentSetB(prdst);
-                String test = rrt.getStatus();
-                if (test.indexOf("Failure") >= 0) 
-                {
+                 DocumentRepositoryProxy proxy = new DocumentRepositoryProxy(endpointUrl, new DirectSOAPHandlerResolver());
+
+                 RegistryResponseType rrt = proxy.provideAndRegisterDocumentSetB(prdst);
+                 String test = rrt.getStatus();
+                 if (test.indexOf("Failure") >= 0)
+                 {
                     String error = "";
                     try{
-                        error = rrt.getRegistryErrorList().getRegistryError().get(0).getCodeContext();
+                       error = rrt.getRegistryErrorList().getRegistryError().get(0).getCodeContext();
                     }catch(Exception x){}
                     throw new Exception("Failure Returned from XDR forward:" + error);
-                }
-                
-                getAuditMessageGenerator().provideAndRegisterAuditSource( threadData.getMessageId(), threadData.getRemoteHost(), threadData.getRelatesTo(), threadData.getTo(), 
-                        threadData.getThisHost(), patId, subsetId, threadData.getPid());
-            }
+                 }
+                 else {
+                    log.info(" SUCCESS RETURNED FROM ENDPOINT  " + to);
+                 }
+
+                 getAuditMessageGenerator().provideAndRegisterAuditSource( threadData.getMessageId(), threadData.getRemoteHost(), threadData.getRelatesTo(), threadData.getTo(),
+                       threadData.getThisHost(), patId, subsetId, threadData.getPid());
+              }
+           }
 
             resp = getRepositoryProvideResponse(threadData.getMessageId());
 
