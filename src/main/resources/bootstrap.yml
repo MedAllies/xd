@@ -8,9 +8,9 @@ spring:
 
   jpa:
     open_in_view: false
-    
+
   main:
-    allow-bean-definition-overriding: true    
+    allow-bean-definition-overriding: true
 
   jmx:
     default-domain:  direct-xd

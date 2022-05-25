@@ -58,7 +58,7 @@ public class XDRTest
     @SuppressWarnings("rawtypes")
     @Test
 	public void testDocumentRepositoryProvideAndRegisterDocumentSetB() throws Exception {
-        System.out.println("documentRepositoryProvideAndRegisterDocumentSetB");
+        System.out.println("documentRepositoryProvideAndRegisterDocumentSetB-Outbound");
         QName qname = new QName("urn:ihe:iti:xds-b:2007", "ProvideAndRegisterDocumentSetRequestType");
         ProvideAndRegisterDocumentSetRequestType body = null;
         try {
@@ -70,7 +70,7 @@ public class XDRTest
             fail("Failed unmarshalling request");
         }
         
-        DocumentRepositoryAbstract instance = new XDR();
+        DocumentRepositoryAbstract instance = new XDRout();
         
         // Set test objects
         instance.setAuditMessageGenerator(new AuditMessageGenerator(getLogfile()));
@@ -109,12 +109,65 @@ public class XDRTest
 
     }
 
+   @Test
+   public void testDocumentRepositoryProvideAndRegisterDocumentSetInbound() throws Exception {
+      System.out.println("documentRepositoryProvideAndRegisterDocumentSetB-Inbound");
+      QName qname = new QName("urn:ihe:iti:xds-b:2007", "ProvideAndRegisterDocumentSetRequestType");
+      ProvideAndRegisterDocumentSetRequestType body = null;
+      try {
+         String request = getTestRequest();
+         JAXBElement jb = (JAXBElement) XmlUtils.unmarshal(request, ihe.iti.xds_b._2007.ObjectFactory.class);
+         body = (ProvideAndRegisterDocumentSetRequestType) jb.getValue();
+      } catch (Exception x) {
+         x.printStackTrace();
+         fail("Failed unmarshalling request");
+      }
+
+      DocumentRepositoryAbstract instance = new XDRin();
+
+      // Set test objects
+      instance.setAuditMessageGenerator(new AuditMessageGenerator(getLogfile()));
+      // instance.setMailClient(new SmtpMailClient("gmail-smtp.l.google.com", "lewistower1@gmail.com", "hadron106"));
+      instance.setResolver(new RoutingResolverImpl());
+
+      XdConfig config = new XdConfig();
+      config.setMailHost("gmail-smtp.l.google.com");
+      config.setMailUser("lewistower1@gmail.com");
+      config.setMailPass("hadron106");
+
+      instance.setConfig(config);
+
+      RegistryResponseType result = instance.documentRepositoryProvideAndRegisterDocumentSetB(body);
+
+
+      if (result.getStatus().contains("Failure"))
+      {
+         // some organizational firewalls may block this test, so bail out gracefully if that happens
+         return;
+      }
+
+      String sresult = null;
+
+      try {
+         qname = new QName("urn:oasis:names:tc:ebxml-regrep:xsd:rs:3.0", "RegistryResponseType");
+
+         sresult = XmlUtils.marshal(qname, result, oasis.names.tc.ebxml_regrep.xsd.rs._3.ObjectFactory.class);
+      } catch (Exception x) {
+         x.printStackTrace();
+         fail("Failed unmarshalling response");
+      }
+
+      // System.out.println(sresult);
+      assertTrue(sresult.indexOf("ResponseStatusType:Success") >= 0);
+
+   }
+
     /**
      * Test the documentRepositoryRetrieveDocumentSet method.
      */
     public void testDocumentRepositoryRetrieveDocumentSet() throws Exception {
         try {
-            DocumentRepositoryAbstract instance = new XDR();
+            DocumentRepositoryAbstract instance = new XDRout();
 
             // Set test objects
             instance.setAuditMessageGenerator(new AuditMessageGenerator(getLogfile()));

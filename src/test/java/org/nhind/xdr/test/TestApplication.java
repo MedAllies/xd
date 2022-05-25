@@ -54,7 +54,10 @@ public class TestApplication extends SpringBootServletInitializer
 		
 		when(resolver.hasSmtpEndpoints(any())).thenReturn(true);
 		when(resolver.getXdEndpoints(any())).thenReturn(Collections.singletonList(recipAddr.toString()));
-		
+
+      when(resolver.hasXdEndpoints(any())).thenReturn(true);
+      when(resolver.getSmtpEndpoints(any())).thenReturn(Collections.singletonList(recipAddr.toString()));
+
 		return resolver;
 	}
 	

@@ -71,7 +71,7 @@ public class XDRSoapTest extends SpringBaseTest
 		final SMTPMailMessage mailMessage = new SMTPMailMessage(msg, Collections.singletonList(recipAddr), sendAddr);
 		
 		final XDDeliveryCore deliveryCore = new XDDeliveryCore(resolver, xdDeliveryCallback, new DefaultTxDetailParser(), 
-				new DefaultMimeXdsTransformer(), new DocumentRepository(), notificationProducer, "http://localhost:8080/xd/services/DocumentRepository_Service");
+				new DefaultMimeXdsTransformer(), new DocumentRepository(), notificationProducer, "http://localhost:8087/xd/services/DocumentRepository_Service");
 		
 		deliveryCore.processAndDeliverXDMessage(mailMessage);
 		
